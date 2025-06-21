@@ -1,0 +1,203 @@
+# Rental Agreement in Baby-L4
+# This example demonstrates a residential lease agreement with common provisions
+
+# l4version 0.3.6
+
+lexicon
+Landlord -> "landlord_N"
+Tenant -> "tenant_N"
+Property -> "property_N"
+Rent -> "rent_N"
+SecurityDeposit -> "security_deposit_N"
+MaintenanceObligation -> "maintenance_obligation_N"
+Pay -> "pay_V2"
+Occupy -> "occupy_V2"
+Maintain -> "maintain_V2"
+Damage -> "damage_V2"
+Evict -> "evict_V2"
+Terminate -> "terminate_V2"
+Refund -> "refund_V2"
+Notice -> "notice_N"
+WearAndTear -> "wear_and_tear_N"
+
+# Core classes
+class Party
+class Landlord extends Party
+class Tenant extends Party
+
+class Property {
+    address: String
+    monthlyRent: Integer
+    securityDeposit: Integer
+}
+
+class Payment {
+    amount: Integer
+    dueDate: Date
+    paid: Boolean
+}
+
+class Date
+class Duration
+
+# Lease-related classes
+class Lease {
+    property: Property
+    landlord: Landlord
+    tenant: Tenant
+    startDate: Date
+    endDate: Date
+    monthlyRent: Integer
+}
+
+class Condition
+class GoodCondition extends Condition
+class DamagedCondition extends Condition
+class NormalWearTear extends Condition
+
+# Predicates for rental relationships
+decl LeaseActive : Lease -> Boolean
+decl CurrentDate : Date
+decl DateBefore : Date -> Date -> Boolean
+decl DayOfMonth : Date -> Integer -> Boolean
+
+# Payment obligations
+decl MustPayRent : Tenant -> Integer -> Date -> Boolean
+decl HasPaid : Tenant -> Payment -> Boolean
+decl LatePayment : Tenant -> Payment -> Boolean
+decl RentOwed : Tenant -> Integer -> Boolean
+
+# Property conditions
+decl PropertyCondition : Property -> Condition -> Boolean
+decl CausedDamage : Tenant -> Property -> Boolean
+decl NormalWearAndTear : Property -> Boolean
+
+# Rights and obligations
+decl MayOccupy : Tenant -> Property -> Boolean
+decl MustMaintain : Party -> Property -> Boolean
+decl MayEvict : Landlord -> Tenant -> Boolean
+decl MustRefundDeposit : Landlord -> Tenant -> Integer -> Boolean
+decl MustGiveNotice : Party -> Integer -> Boolean  # days of notice
+
+# Breach conditions
+decl InBreach : Party -> Lease -> Boolean
+decl NonPayment : Tenant -> Boolean
+decl PropertyAbandoned : Tenant -> Property -> Boolean
+
+# Core lease rule: tenant may occupy if lease active and rent paid
+rule <occupancyRight>
+for t : Tenant, l : Lease, p : Property
+if LeaseActive l && l.tenant == t && l.property == p && 
+   not (exists payment : Payment . LatePayment t payment)
+then MayOccupy t p
+
+# Monthly rent obligation
+rule <rentObligation>
+for l : Lease, t : Tenant, d : Date
+if LeaseActive l && l.tenant == t && DayOfMonth d 1 &&
+   DateBefore l.startDate d && DateBefore d l.endDate
+then MustPayRent t l.monthlyRent d
+
+# Late payment determination
+rule <latePaymentRule>
+for t : Tenant, p : Payment, d : Date
+if CurrentDate == d && DateBefore p.dueDate d && 
+   not HasPaid t p && p.amount > 0
+then LatePayment t p
+
+# Maintenance obligations
+rule <tenantMaintenance>
+for l : Lease, t : Tenant, p : Property
+if LeaseActive l && l.tenant == t && l.property == p
+then MustMaintain t p
+
+rule <landlordMajorMaintenance>
+for l : Lease, lord : Landlord, p : Property
+if LeaseActive l && l.landlord == lord && l.property == p
+then MustMaintain lord p  # for major repairs
+
+# Eviction for non-payment
+rule <evictionForNonPayment>
+for l : Lease, lord : Landlord, t : Tenant
+if l.landlord == lord && l.tenant == t &&
+   exists p1 : Payment, p2 : Payment, p3 : Payment . 
+   (LatePayment t p1 && LatePayment t p2 && LatePayment t p3 &&
+    p1 /= p2 && p2 /= p3 && p1 /= p3)  # 3 months late
+then MayEvict lord t
+
+# Security deposit rules
+rule <depositRefundFull>
+for l : Lease, lord : Landlord, t : Tenant
+if not LeaseActive l && l.landlord == lord && l.tenant == t &&
+   PropertyCondition l.property GoodCondition &&
+   not CausedDamage t l.property
+then MustRefundDeposit lord t l.property.securityDeposit
+
+rule <depositRefundPartial>
+for l : Lease, lord : Landlord, t : Tenant, damagesCost : Integer
+if not LeaseActive l && l.landlord == lord && l.tenant == t &&
+   CausedDamage t l.property && damagesCost > 0 &&
+   damagesCost < l.property.securityDeposit
+then MustRefundDeposit lord t (l.property.securityDeposit - damagesCost)
+
+# Normal wear and tear exception
+rule <normalWearException>
+for t : Tenant, p : Property
+if NormalWearAndTear p
+then not CausedDamage t p
+
+# Notice requirements for termination
+rule <tenantNoticeRequired>
+for l : Lease, t : Tenant
+if LeaseActive l && l.tenant == t
+then MustGiveNotice t 30  # 30 days notice
+
+rule <landlordNoticeRequired>
+for l : Lease, lord : Landlord
+if LeaseActive l && l.landlord == lord && 
+   not (exists t : Tenant . InBreach t l)
+then MustGiveNotice lord 30
+
+# Breach conditions
+rule <breachByNonPayment>
+for t : Tenant, l : Lease
+if l.tenant == t && NonPayment t
+then InBreach t l
+
+rule <breachByAbandonment>
+for t : Tenant, l : Lease, p : Property
+if l.tenant == t && l.property == p && PropertyAbandoned t p
+then InBreach t l
+
+# Example scenario
+decl johnDoe : Tenant
+decl janeSmith : Landlord
+decl apt123 : Property
+decl lease2024 : Lease
+decl jan2024 : Date
+decl dec2024 : Date
+decl currentMonth : Date
+decl rentPaymentJan : Payment
+
+# Facts for the scenario
+fact <apartmentDetails>
+apt123.monthlyRent == 1500 && apt123.securityDeposit == 3000
+
+fact <leaseDetails>
+lease2024.property == apt123 &&
+lease2024.landlord == janeSmith &&
+lease2024.tenant == johnDoe &&
+lease2024.startDate == jan2024 &&
+lease2024.endDate == dec2024 &&
+lease2024.monthlyRent == 1500
+
+fact <leaseIsActive> LeaseActive lease2024
+fact <currentDateIs> CurrentDate == currentMonth
+fact <propertyInGoodShape> PropertyCondition apt123 GoodCondition
+
+# Assertions to test
+assert <johnMayOccupy> MayOccupy johnDoe apt123
+assert <johnMustMaintain> MustMaintain johnDoe apt123
+assert <janeCannotEvictWithoutCause> not MayEvict janeSmith johnDoe
+assert <depositMustBeRefunded> 
+    not LeaseActive lease2024 --> MustRefundDeposit janeSmith johnDoe 3000

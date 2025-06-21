@@ -1,0 +1,285 @@
+# Employment Contract in Baby-L4
+# This example demonstrates a comprehensive employment agreement with various clauses
+
+# l4version 0.3.6
+
+lexicon
+Employer -> "employer_N"
+Employee -> "employee_N"
+Position -> "position_N"
+Salary -> "salary_N"
+Bonus -> "bonus_N"
+Benefit -> "benefit_N"
+Work -> "work_V2"
+Terminate -> "terminate_V2"
+Resign -> "resign_V2"
+CompeteWith -> "compete_with_V2"
+Confidential -> "confidential_A"
+Proprietary -> "proprietary_A"
+Probation -> "probation_N"
+Performance -> "performance_N"
+Satisfactory -> "satisfactory_A"
+VacationDays -> "vacation_days_N"
+SickLeave -> "sick_leave_N"
+Overtime -> "overtime_N"
+
+# Core classes
+class Party
+class Company extends Party
+class Individual extends Party
+
+class Employer extends Company
+class Employee extends Individual
+
+# Employment-related classes
+class Position {
+    title: String
+    department: String
+    level: Integer  # seniority level
+}
+
+class Compensation {
+    baseSalary: Integer
+    bonusEligible: Boolean
+    stockOptions: Integer
+}
+
+class Benefits {
+    healthInsurance: Boolean
+    dentalInsurance: Boolean
+    retirementMatch: Float  # percentage
+    vacationDays: Integer
+    sickDays: Integer
+}
+
+class Employment {
+    employer: Employer
+    employee: Employee
+    position: Position
+    compensation: Compensation
+    benefits: Benefits
+    startDate: Date
+    probationEndDate: Date
+}
+
+class PerformanceRating
+decl Excellent : PerformanceRating
+decl Satisfactory : PerformanceRating  
+decl NeedsImprovement : PerformanceRating
+decl Unsatisfactory : PerformanceRating
+
+class TerminationReason
+decl ForCause : TerminationReason
+decl WithoutCause : TerminationReason
+decl Resignation : TerminationReason
+decl Redundancy : TerminationReason
+
+class Date
+class Duration
+
+# Employment status predicates
+decl EmploymentActive : Employment -> Boolean
+decl InProbation : Employee -> Boolean
+decl PassedProbation : Employee -> Boolean
+decl CurrentDate : Date
+decl DateBefore : Date -> Date -> Boolean
+
+# Work obligations
+decl MustWork : Employee -> Integer -> Boolean  # hours per week
+decl MustFollowPolicies : Employee -> Employer -> Boolean
+decl WorkedOvertime : Employee -> Integer -> Date -> Boolean
+decl RemoteWorkAllowed : Employee -> Boolean
+
+# Compensation and benefits
+decl MustPay : Employer -> Employee -> Integer -> Date -> Boolean
+decl EligibleForBonus : Employee -> Boolean
+decl AccruedVacation : Employee -> Integer -> Boolean
+decl UsedVacation : Employee -> Integer -> Boolean
+decl VacationBalance : Employee -> Integer -> Boolean
+
+# Performance
+decl PerformanceScore : Employee -> PerformanceRating -> Boolean
+decl PromotionEligible : Employee -> Boolean
+
+# Confidentiality and non-compete
+decl HasAccessTo : Employee -> Information -> Boolean
+decl MustKeepConfidential : Employee -> Information -> Boolean
+decl CompetingBusiness : Company -> Company -> Boolean
+decl MayNotCompete : Employee -> Company -> Duration -> Boolean
+
+# Termination
+decl MayTerminate : Party -> Employment -> TerminationReason -> Boolean
+decl NoticePeriod : Party -> Integer -> Boolean  # days
+decl SeveranceDue : Employee -> Integer -> Boolean
+
+# Information classes
+class Information
+class ConfidentialInfo extends Information
+class TradeSecret extends ConfidentialInfo
+class ClientList extends ConfidentialInfo
+
+# Core employment relationship
+rule <employmentObligation>
+for emp : Employment, e : Employee
+if EmploymentActive emp && emp.employee == e
+then MustWork e 40  # 40 hours per week standard
+
+# Probation rules
+rule <probationPeriod>
+for emp : Employment, e : Employee, d : Date
+if emp.employee == e && CurrentDate == d && 
+   DateBefore emp.startDate d && DateBefore d emp.probationEndDate
+then InProbation e
+
+rule <probationCompletion>
+for emp : Employment, e : Employee
+if emp.employee == e && PerformanceScore e Satisfactory &&
+   DateBefore emp.probationEndDate CurrentDate
+then PassedProbation e
+
+# Compensation rules
+rule <salaryObligation>
+for emp : Employment, er : Employer, e : Employee, d : Date
+if EmploymentActive emp && emp.employer == er && emp.employee == e &&
+   # Assuming monthly payment on the last day
+   exists lastDay : Integer . DayOfMonth d lastDay && lastDay >= 28
+then MustPay er e emp.compensation.baseSalary d
+
+rule <overtimeCompensation>
+for emp : Employment, e : Employee, hours : Integer, d : Date
+if emp.employee == e && WorkedOvertime e hours d && hours > 40
+then exists overtime : Integer . 
+     overtime == ((hours - 40) * 15 / 10) &&  # 1.5x rate
+     MustPay emp.employer e overtime d
+
+# Bonus eligibility
+rule <bonusEligibility>
+for emp : Employment, e : Employee
+if emp.employee == e && emp.compensation.bonusEligible &&
+   (PerformanceScore e Excellent || PerformanceScore e Satisfactory)
+then EligibleForBonus e
+
+# Vacation accrual
+rule <vacationAccrual>
+for emp : Employment, e : Employee, months : Integer
+if EmploymentActive emp && emp.employee == e &&
+   # months employed
+   exists accrued : Integer . accrued == (emp.benefits.vacationDays * months / 12)
+then AccruedVacation e accrued
+
+rule <vacationBalance>
+for e : Employee, accrued : Integer, used : Integer
+if AccruedVacation e accrued && UsedVacation e used
+then VacationBalance e (accrued - used)
+
+# Confidentiality obligations
+rule <confidentialityDuty>
+for emp : Employment, e : Employee, info : ConfidentialInfo
+if (EmploymentActive emp || exists d : Duration . True) &&  # even after employment
+   emp.employee == e && HasAccessTo e info
+then MustKeepConfidential e info
+
+# Non-compete clause (post-employment)
+rule <nonCompeteObligation>
+for emp : Employment, e : Employee, c : Company
+if not EmploymentActive emp && emp.employee == e &&
+   CompetingBusiness c emp.employer
+then MayNotCompete e c (Years 2)  # 2-year non-compete
+
+# Termination rules
+rule <terminationForCause>
+for emp : Employment, er : Employer
+if emp.employer == er && 
+   exists e : Employee . emp.employee == e && PerformanceScore e Unsatisfactory
+then MayTerminate er emp ForCause
+
+rule <terminationWithoutCause>
+for emp : Employment, er : Employer
+if emp.employer == er && PassedProbation emp.employee
+then MayTerminate er emp WithoutCause
+
+rule <employeeResignation>
+for emp : Employment, e : Employee
+if emp.employee == e
+then MayTerminate e emp Resignation
+
+# Notice period requirements
+rule <employerNotice>
+for emp : Employment, er : Employer
+if emp.employer == er && MayTerminate er emp WithoutCause
+then NoticePeriod er 30  # 30 days notice
+
+rule <employeeNotice>
+for emp : Employment, e : Employee
+if emp.employee == e && MayTerminate e emp Resignation
+then NoticePeriod e 14  # 2 weeks notice
+
+# Severance rules
+rule <severanceCalculation>
+for emp : Employment, e : Employee, years : Integer
+if emp.employee == e && not EmploymentActive emp &&
+   exists reason : TerminationReason . 
+   (reason == WithoutCause || reason == Redundancy) &&
+   # years of service
+   exists severance : Integer . severance == (years * emp.compensation.baseSalary / 12)
+then SeveranceDue e severance
+
+# Policy compliance
+rule <policyCompliance>
+for emp : Employment, e : Employee, er : Employer
+if EmploymentActive emp && emp.employee == e && emp.employer == er
+then MustFollowPolicies e er
+
+# Remote work eligibility (example of modern clause)
+rule <remoteWorkEligibility>
+for emp : Employment, e : Employee
+if emp.employee == e && PassedProbation e &&
+   PerformanceScore e Satisfactory
+then RemoteWorkAllowed e
+
+# Example scenario
+decl techCorp : Employer
+decl aliceJones : Employee
+decl softwareEngineer : Position
+decl empContract : Employment
+decl startDate2024 : Date
+decl probationEnd2024 : Date
+decl currentDateNow : Date
+decl salary100k : Integer
+decl clientDatabase : ClientList
+
+# Facts for the scenario
+fact <positionDetails>
+softwareEngineer.title == "Senior Software Engineer" &&
+softwareEngineer.department == "Engineering" &&
+softwareEngineer.level == 3
+
+fact <compensationPackage>
+empContract.compensation.baseSalary == 100000 &&
+empContract.compensation.bonusEligible == True &&
+empContract.compensation.stockOptions == 5000
+
+fact <benefitsPackage>
+empContract.benefits.healthInsurance == True &&
+empContract.benefits.vacationDays == 20 &&
+empContract.benefits.sickDays == 10
+
+fact <employmentSetup>
+empContract.employer == techCorp &&
+empContract.employee == aliceJones &&
+empContract.position == softwareEngineer &&
+empContract.startDate == startDate2024 &&
+empContract.probationEndDate == probationEnd2024
+
+fact <currentEmployment> EmploymentActive empContract
+fact <alicePerformance> PerformanceScore aliceJones Excellent
+fact <aliceAccess> HasAccessTo aliceJones clientDatabase
+
+# Assertions to verify
+assert <aliceMustWork40Hours> MustWork aliceJones 40
+assert <techCorpMustPaySalary> 
+    exists d : Date . MustPay techCorp aliceJones 100000 d
+assert <aliceEligibleForBonus> EligibleForBonus aliceJones
+assert <aliceMustProtectSecrets> MustKeepConfidential aliceJones clientDatabase
+assert <aliceCanWorkRemote> 
+    PassedProbation aliceJones --> RemoteWorkAllowed aliceJones

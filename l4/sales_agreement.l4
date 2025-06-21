@@ -1,0 +1,299 @@
+# Sales Agreement in Baby-L4
+# This example demonstrates a commercial sale of goods contract with standard terms
+
+# l4version 0.3.6
+
+lexicon
+Buyer -> "buyer_N"
+Seller -> "seller_N"
+Product -> "product_N"
+Goods -> "goods_N"
+Payment -> "payment_N"
+Delivery -> "delivery_N"
+Purchase -> "purchase_V2"
+Sell -> "sell_V2"
+Deliver -> "deliver_V2"
+Pay -> "pay_V2"
+Accept -> "accept_V2"
+Reject -> "reject_V2"
+Warranty -> "warranty_N"
+Defect -> "defect_N"
+Title -> "title_N"
+Risk -> "risk_N"
+ForceMajeure -> "force_majeure_N"
+
+# Core parties and entities
+class Party
+class Company extends Party
+class Individual extends Party
+
+class Buyer extends Party
+class Seller extends Party
+
+# Product and goods classes
+class Product {
+    name: String
+    sku: String
+    unitPrice: Integer
+}
+
+class Goods {
+    product: Product
+    quantity: Integer
+    totalPrice: Integer
+}
+
+class Quality
+decl ConformsToSpec : Quality
+decl MinorDefects : Quality
+decl MajorDefects : Quality
+
+# Payment and delivery
+class PaymentTerms
+decl Immediate : PaymentTerms
+decl Net30 : PaymentTerms
+decl Net60 : PaymentTerms
+decl Installments : PaymentTerms
+
+class DeliveryMethod
+decl FOB : DeliveryMethod  # Free on Board
+decl CIF : DeliveryMethod  # Cost, Insurance, Freight
+decl ExWorks : DeliveryMethod
+
+class Date
+class Duration
+
+# Sales agreement structure
+class SalesAgreement {
+    buyer: Buyer
+    seller: Seller
+    goods: Goods
+    paymentTerms: PaymentTerms
+    deliveryMethod: DeliveryMethod
+    deliveryDate: Date
+    agreementDate: Date
+}
+
+# Order and fulfillment status
+class OrderStatus
+decl Placed : OrderStatus
+decl Confirmed : OrderStatus
+decl Shipped : OrderStatus
+decl Delivered : OrderStatus
+decl Completed : OrderStatus
+decl Cancelled : OrderStatus
+
+# Core predicates
+decl AgreementActive : SalesAgreement -> Boolean
+decl CurrentDate : Date
+decl DateBefore : Date -> Date -> Boolean
+decl DaysAfter : Date -> Integer -> Date -> Boolean
+
+# Obligations and rights
+decl MustDeliver : Seller -> Goods -> Buyer -> Date -> Boolean
+decl MustPay : Buyer -> Integer -> Seller -> Date -> Boolean
+decl HasDelivered : Seller -> Goods -> Boolean
+decl HasPaid : Buyer -> Integer -> Boolean
+decl MayReject : Buyer -> Goods -> Boolean
+decl MustAccept : Buyer -> Goods -> Boolean
+
+# Quality and inspection
+decl GoodsQuality : Goods -> Quality -> Boolean
+decl InspectionPeriod : Integer  # days
+decl HasInspected : Buyer -> Goods -> Boolean
+decl RejectedGoods : Buyer -> Goods -> Boolean
+
+# Title and risk
+decl TitlePassed : Goods -> Buyer -> Boolean
+decl RiskPassed : Goods -> Buyer -> Boolean
+decl OwnsGoods : Party -> Goods -> Boolean
+
+# Warranties
+decl WarrantyPeriod : Integer  # months
+decl UnderWarranty : Goods -> Boolean
+decl WarrantyClaim : Buyer -> Goods -> Boolean
+decl MustRepairOrReplace : Seller -> Goods -> Boolean
+
+# Breach and remedies
+decl InBreach : Party -> SalesAgreement -> Boolean
+decl LiquidatedDamages : Integer -> Boolean
+decl MayTerminate : Party -> SalesAgreement -> Boolean
+
+# Force majeure
+decl ForceMajeureEvent : Boolean
+decl ExcusedPerformance : Party -> Boolean
+
+# Core sales rules
+
+# Delivery obligation
+rule <deliveryObligation>
+for sa : SalesAgreement, s : Seller, b : Buyer
+if AgreementActive sa && sa.seller == s && sa.buyer == b
+then MustDeliver s sa.goods b sa.deliveryDate
+
+# Payment terms
+rule <paymentImmediate>
+for sa : SalesAgreement, b : Buyer, s : Seller
+if AgreementActive sa && sa.buyer == b && sa.seller == s &&
+   sa.paymentTerms == Immediate && HasDelivered s sa.goods
+then MustPay b sa.goods.totalPrice s CurrentDate
+
+rule <paymentNet30>
+for sa : SalesAgreement, b : Buyer, s : Seller, payDate : Date
+if AgreementActive sa && sa.buyer == b && sa.seller == s &&
+   sa.paymentTerms == Net30 && HasDelivered s sa.goods &&
+   DaysAfter sa.deliveryDate 30 payDate
+then MustPay b sa.goods.totalPrice s payDate
+
+# Acceptance and rejection
+rule <goodsAcceptance>
+for sa : SalesAgreement, b : Buyer, g : Goods
+if sa.buyer == b && sa.goods == g && HasDelivered sa.seller g &&
+   GoodsQuality g ConformsToSpec
+then MustAccept b g
+
+rule <goodsRejection>
+for sa : SalesAgreement, b : Buyer, g : Goods, inspDate : Date
+if sa.buyer == b && sa.goods == g && HasDelivered sa.seller g &&
+   (GoodsQuality g MajorDefects || not GoodsQuality g ConformsToSpec) &&
+   DaysAfter sa.deliveryDate InspectionPeriod inspDate &&
+   DateBefore CurrentDate inspDate
+then MayReject b g
+
+# Title and risk transfer - FOB terms
+rule <titleTransferFOB>
+for sa : SalesAgreement, g : Goods, b : Buyer
+if sa.deliveryMethod == FOB && sa.goods == g && sa.buyer == b &&
+   HasDelivered sa.seller g
+then TitlePassed g b
+
+rule <riskTransferFOB>
+for sa : SalesAgreement, g : Goods, b : Buyer
+if sa.deliveryMethod == FOB && sa.goods == g && sa.buyer == b &&
+   # Risk passes when goods are loaded on carrier
+   exists shipped : Boolean . shipped
+then RiskPassed g b
+
+# Title and risk transfer - Ex Works terms
+rule <titleRiskExWorks>
+for sa : SalesAgreement, g : Goods, b : Buyer
+if sa.deliveryMethod == ExWorks && sa.goods == g && sa.buyer == b &&
+   # Buyer takes possession at seller's premises
+   exists collected : Boolean . collected
+then TitlePassed g b && RiskPassed g b
+
+# Ownership follows title
+rule <ownershipRule>
+for p : Party, g : Goods, b : Buyer
+if TitlePassed g b && p == b
+then OwnsGoods p g
+
+# Warranty rules
+rule <warrantyApplies>
+for g : Goods, months : Integer
+if WarrantyPeriod == months && HasDelivered (exists s : Seller . s) g &&
+   # Within warranty period
+   exists deliveryDate : Date, currentDate : Date . True
+then UnderWarranty g
+
+rule <warrantyObligation>
+for sa : SalesAgreement, s : Seller, b : Buyer, g : Goods
+if sa.seller == s && sa.buyer == b && sa.goods == g &&
+   UnderWarranty g && WarrantyClaim b g &&
+   GoodsQuality g MinorDefects
+then MustRepairOrReplace s g
+
+# Breach conditions
+rule <breachByNonDelivery>
+for sa : SalesAgreement, s : Seller
+if sa.seller == s && DateBefore sa.deliveryDate CurrentDate &&
+   not HasDelivered s sa.goods && not ForceMajeureEvent
+then InBreach s sa
+
+rule <breachByNonPayment>
+for sa : SalesAgreement, b : Buyer, paymentDue : Date
+if sa.buyer == b && MustPay b sa.goods.totalPrice sa.seller paymentDue &&
+   DateBefore paymentDue CurrentDate && not HasPaid b sa.goods.totalPrice
+then InBreach b sa
+
+# Termination rights
+rule <terminationForBreach>
+for sa : SalesAgreement, p : Party, otherParty : Party
+if (sa.buyer == p && sa.seller == otherParty ||
+    sa.seller == p && sa.buyer == otherParty) &&
+   InBreach otherParty sa
+then MayTerminate p sa
+
+# Force majeure
+rule <forceMajeureExcuse>
+for p : Party
+if ForceMajeureEvent
+then ExcusedPerformance p
+
+rule <noBreachDuringForceMajeure>
+for sa : SalesAgreement, p : Party
+if ExcusedPerformance p
+then not InBreach p sa
+
+# Liquidated damages
+rule <liquidatedDamagesClause>
+for sa : SalesAgreement, s : Seller, daysLate : Integer
+if sa.seller == s && DateBefore sa.deliveryDate CurrentDate &&
+   not HasDelivered s sa.goods && daysLate > 0 &&
+   # 1% of contract value per day late, max 10%
+   exists damages : Integer . 
+   damages == min(sa.goods.totalPrice * daysLate / 100, sa.goods.totalPrice / 10)
+then LiquidatedDamages damages
+
+# Example scenario
+decl widgetCorp : Seller
+decl acmeManufacturing : Buyer
+decl industrialWidget : Product
+decl orderGoods : Goods
+decl salesContract : SalesAgreement
+decl orderDate : Date
+decl dueDate : Date
+decl today : Date
+
+# Facts for the scenario
+fact <productSpec>
+industrialWidget.name == "Industrial Widget XL" &&
+industrialWidget.sku == "IW-XL-2024" &&
+industrialWidget.unitPrice == 1000
+
+fact <orderDetails>
+orderGoods.product == industrialWidget &&
+orderGoods.quantity == 100 &&
+orderGoods.totalPrice == 100000
+
+fact <contractTerms>
+salesContract.buyer == acmeManufacturing &&
+salesContract.seller == widgetCorp &&
+salesContract.goods == orderGoods &&
+salesContract.paymentTerms == Net30 &&
+salesContract.deliveryMethod == FOB &&
+salesContract.deliveryDate == dueDate &&
+salesContract.agreementDate == orderDate
+
+fact <contractActive> AgreementActive salesContract
+fact <warrantyIs12Months> WarrantyPeriod == 12
+fact <inspectionIs7Days> InspectionPeriod == 7
+fact <currentDateToday> CurrentDate == today
+
+# Test scenarios
+fact <goodsDelivered> HasDelivered widgetCorp orderGoods
+fact <goodsConform> GoodsQuality orderGoods ConformsToSpec
+
+# Assertions to verify
+assert <widgetCorpMustDeliver> 
+    MustDeliver widgetCorp orderGoods acmeManufacturing dueDate
+assert <acmeMustAcceptGoods> 
+    MustAccept acmeManufacturing orderGoods
+assert <titlePassedToAcme> 
+    TitlePassed orderGoods acmeManufacturing
+assert <acmeOwnsGoods> 
+    OwnsGoods acmeManufacturing orderGoods
+assert <paymentDueIn30Days> 
+    exists payDate : Date . 
+    DaysAfter dueDate 30 payDate && 
+    MustPay acmeManufacturing 100000 widgetCorp payDate

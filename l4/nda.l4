@@ -1,0 +1,132 @@
+# Non-Disclosure Agreement (NDA) in Baby-L4
+# This example demonstrates how to formalize a basic mutual NDA
+
+# l4version 0.3.6
+
+lexicon
+DisclosingParty -> "disclosing_party_N"
+ReceivingParty -> "receiving_party_N"
+ConfidentialInformation -> "confidential_information_N"
+Disclose -> "disclose_V2"
+Use -> "use_V2"
+Protect -> "protect_V2"
+Purpose -> "purpose_N"
+AuthorizedPurpose -> "authorized_purpose_N"
+Breach -> "breach_V2"
+Violate -> "violate_V2"
+Employee -> "employee_N"
+Contractor -> "contractor_N"
+NeedToKnow -> "need_to_know_N"
+
+# Classes representing parties and entities
+class Party
+class Company extends Party
+class Individual extends Party
+
+class DisclosingParty extends Party
+class ReceivingParty extends Party
+
+class Information
+class ConfidentialInformation extends Information
+class PublicInformation extends Information
+class TradeSecret extends ConfidentialInformation
+
+class Purpose
+class AuthorizedPurpose extends Purpose
+
+class Agreement
+class NDA extends Agreement
+
+# Time representation
+class Duration
+decl Years : Integer -> Duration
+
+# Predicates for the NDA
+decl Discloses : DisclosingParty -> ConfidentialInformation -> ReceivingParty -> Boolean
+decl MayUse : ReceivingParty -> ConfidentialInformation -> Purpose -> Boolean
+decl MustProtect : ReceivingParty -> ConfidentialInformation -> Boolean
+decl MustNotDisclose : ReceivingParty -> ConfidentialInformation -> Party -> Boolean
+decl IsPublic : Information -> Boolean
+decl IsExempt : Information -> Boolean
+decl HasNeedToKnow : Party -> ConfidentialInformation -> Purpose -> Boolean
+decl InEffect : Agreement -> Boolean
+decl Breached : Party -> Agreement -> Boolean
+
+# Define what constitutes confidential information
+rule <confidentialInfoDefinition>
+for info : Information
+if not IsPublic info && not IsExempt info
+then exists ci : ConfidentialInformation . ci == info
+
+# Core obligation: Receiving party must protect confidential information
+rule <protectionObligation>
+for dp : DisclosingParty, rp : ReceivingParty, ci : ConfidentialInformation
+if Discloses dp ci rp && InEffect nda
+then MustProtect rp ci
+
+# Permitted use only for authorized purposes
+rule <authorizedUseOnly>
+for rp : ReceivingParty, ci : ConfidentialInformation, p : Purpose
+if MustProtect rp ci && exists ap : AuthorizedPurpose . p == ap
+then MayUse rp ci p
+
+# Non-disclosure obligation
+rule <nonDisclosureObligation>
+for rp : ReceivingParty, ci : ConfidentialInformation, tp : Party
+if MustProtect rp ci && not HasNeedToKnow tp ci (exists p : AuthorizedPurpose . p)
+then MustNotDisclose rp ci tp
+
+# Exception: May disclose to employees/contractors with need to know
+rule <needToKnowException>
+for rp : ReceivingParty, ci : ConfidentialInformation, emp : Party, ap : AuthorizedPurpose
+if MustProtect rp ci && HasNeedToKnow emp ci ap
+then not MustNotDisclose rp ci emp
+
+# Public information exception
+rule <publicInfoException>
+for info : Information
+if IsPublic info
+then not exists ci : ConfidentialInformation . ci == info
+
+# Breach condition
+rule <breachByUnauthorizedDisclosure>
+for rp : ReceivingParty, ci : ConfidentialInformation, tp : Party
+if MustNotDisclose rp ci tp && Discloses rp ci tp
+then Breached rp nda
+
+rule <breachByUnauthorizedUse>
+for rp : ReceivingParty, ci : ConfidentialInformation, p : Purpose
+if MustProtect rp ci && not MayUse rp ci p && 
+   exists use : Boolean . use  # representing actual use occurred
+then Breached rp nda
+
+# Duration rules
+decl ValidUntil : Agreement -> Duration -> Boolean
+decl CurrentTime : Duration
+
+rule <agreementExpiry>
+for agr : Agreement, d : Duration
+if ValidUntil agr d && CurrentTime > d
+then not InEffect agr
+
+# Example scenario setup
+decl nda : NDA
+decl acmeCorp : Company
+decl betaInc : Company
+decl tradeSecretFormula : TradeSecret
+decl productDevelopment : AuthorizedPurpose
+decl marketing : Purpose
+decl externalConsultant : Individual
+
+# Facts for testing
+fact <ndaInEffect> InEffect nda
+fact <validFor5Years> ValidUntil nda (Years 5)
+fact <acmeDiscloses> Discloses acmeCorp tradeSecretFormula betaInc
+fact <productDevAuthorized> productDevelopment == productDevelopment
+fact <consultantNeedToKnow> HasNeedToKnow externalConsultant tradeSecretFormula productDevelopment
+
+# Assertions to verify the contract logic
+assert <betaMustProtect> MustProtect betaInc tradeSecretFormula
+assert <betaMayUseForProductDev> MayUse betaInc tradeSecretFormula productDevelopment
+assert <betaMustNotUseForMarketing> not MayUse betaInc tradeSecretFormula marketing
+assert <betaCanShareWithConsultant> not MustNotDisclose betaInc tradeSecretFormula externalConsultant
